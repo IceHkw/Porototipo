@@ -17,6 +17,8 @@ public class GroundMovement : EnemyMovementBase
 
     [Header("Obstacle Detection")]
     public float wallCheckDistance = 0.5f;
+    [Tooltip("Altura a la que se realiza la comprobación de la pared.")]
+    public float wallCheckHeight = 0.5f; // << NUEVO CAMPO AÑADIDO
     public float ledgeCheckDistance = 2f;
     private bool wallInFront;
     private bool ledgeInFront;
@@ -134,8 +136,11 @@ public class GroundMovement : EnemyMovementBase
         // Verificar suelo
         isGrounded = Physics2D.Raycast(position, Vector2.down, groundCheckDistance, groundLayer);
 
-        // Verificar pared al frente
-        wallInFront = Physics2D.Raycast(position, sensorDirection, wallCheckDistance, groundLayer);
+        // << LÓGICA MODIFICADA >>
+        // Verificar pared al frente usando la nueva altura
+        Vector2 wallCheckStartPos = position + (Vector2.up * wallCheckHeight);
+        wallInFront = Physics2D.Raycast(wallCheckStartPos, sensorDirection, wallCheckDistance, groundLayer);
+        // << FIN DE LA MODIFICACIÓN >>
 
         // Verificar borde/precipicio al frente
         Vector2 ledgeCheckStartPos = position + (Vector2)(sensorDirection * wallCheckDistance);
@@ -233,9 +238,12 @@ public class GroundMovement : EnemyMovementBase
         Gizmos.color = groundCheckColor;
         Gizmos.DrawLine(position, position + Vector3.down * groundCheckDistance);
 
+        // << LÓGICA MODIFICADA >>
         // --- Detección de Pared ---
         Gizmos.color = wallCheckColor;
-        Gizmos.DrawLine(position, position + Vector3.right * direction * wallCheckDistance);
+        Vector3 wallCheckStart = position + (Vector3.up * wallCheckHeight);
+        Gizmos.DrawLine(wallCheckStart, wallCheckStart + Vector3.right * direction * wallCheckDistance);
+        // << FIN DE LA MODIFICACIÓN >>
 
         // --- Detección de Borde ---
         Gizmos.color = ledgeCheckColor;
