@@ -2,408 +2,143 @@ using UnityEngine;
 using System.Collections;
 
 /// <summary>
-/// Comportamiento de ataque melee que hace que el enemigo ataque y luego retroceda
+/// Comportamiento de ataque melee que se activa mediante Animation Events.
 /// </summary>
 public class MeleeAttackBehavior : EnemyBehaviorBase
 {
     [Header("Attack Settings")]
     [SerializeField] private float attackRange = 1.5f;
-    [SerializeField] private float attackDamage = 1f;
+    [SerializeField] private int attackDamage = 1;
     [SerializeField] private float attackCooldown = 2f;
-    [SerializeField] private float attackDuration = 0.5f; // Duración de la animación de ataque
 
-    [Header("Attack Detection")]
-    [SerializeField] private Vector2 attackSize = new Vector2(1f, 1f);
-    [SerializeField] private Vector2 attackOffset = new Vector2(0.5f, 0f);
+    [Header("Attack Area (Configurable)")]
+    [Tooltip("El punto desde donde se origina el ataque. Debe ser un Transform hijo del enemigo.")]
+    [SerializeField] private Transform attackPoint;
+    [SerializeField] private float attackRadius = 0.5f;
     [SerializeField] private LayerMask playerLayer = -1;
 
-    [Header("Retreat Settings")]
-    [SerializeField] private float retreatDistance = 2f;
-    [SerializeField] private float retreatDuration = 0.5f;
-    [SerializeField] private float retreatWaitTime = 0.3f; // Tiempo de espera después de retroceder
+    [Header("Timing")]
+    [Tooltip("Tiempo que el enemigo se detiene después de iniciar el ataque.")]
+    [SerializeField] private float postAttackDelay = 0.75f;
 
-    [Header("Chase Settings")]
-    [SerializeField] private float chaseRange = 10f; // Rango máximo para perseguir
-    [SerializeField] private float stopChaseRange = 15f; // Si el jugador se aleja mucho, dejar de perseguir
+    // Referencia al controlador de animaciones
+    private EnemyAnimatorController enemyAnimator;
 
-    [Header("Animation")]
-    [SerializeField] private string attackAnimationTrigger = "Attack";
-    private Animator animator;
-
-    [Header("Effects")]
-    [SerializeField] private GameObject attackEffect; // Efecto visual del ataque
-
-    // Estados del comportamiento
-    public enum State
-    {
-        Idle,
-        Chasing,
-        Attacking,
-        Retreating,
-        Waiting
-    }
-
-    private State currentState = State.Idle;
+    // Estado
     private float lastAttackTime = -10f;
-    private bool isAttacking = false;
-    private Coroutine currentStateCoroutine;
+    private bool isExecutingAttack = false;
 
     #region Initialization
-
     protected override void OnStart()
     {
-        animator = GetComponent<Animator>();
-        ChangeToState(State.Idle);
-    }
+        // Buscamos el controlador de animaciones en los hijos
+        enemyAnimator = GetComponentInChildren<EnemyAnimatorController>();
 
-    protected override void OnCleanup()
-    {
-        if (currentStateCoroutine != null)
+        if (attackPoint == null)
         {
-            StopCoroutine(currentStateCoroutine);
+            Debug.LogError($"[MeleeAttackBehavior] en '{gameObject.name}': El 'attackPoint' no está asignado en el Inspector.", this);
+            enableBehavior = false; // Deshabilitamos el script si no está bien configurado
         }
     }
 
+    protected override void OnCleanup() { }
     #endregion
 
     #region Behavior Update
-
     protected override void UpdateBehavior()
     {
-        // El comportamiento se maneja principalmente a través de coroutines y estados
-        // pero verificamos transiciones aquí
+        // No hacer nada si ya estamos en medio de un ataque
+        if (isExecutingAttack) return;
 
-        switch (currentState)
+        // Si el jugador está en rango y no estamos en cooldown, atacamos
+        if (IsPlayerInRange(attackRange) && CanAttack())
         {
-            case State.Idle:
-                CheckForChaseTransition();
-                break;
-
-            case State.Chasing:
-                CheckForAttackTransition();
-                CheckForIdleTransition();
-                break;
-
-            case State.Attacking:
-                // El ataque se maneja completamente en la coroutine
-                break;
-
-            case State.Retreating:
-                // El retroceso se maneja completamente en la coroutine
-                break;
-
-            case State.Waiting:
-                // La espera se maneja completamente en la coroutine
-                break;
+            StartCoroutine(AttackCoroutine());
         }
     }
-
     #endregion
 
-    #region State Management
-
-    void ChangeToState(State newState)
+    private bool CanAttack()
     {
-        if (currentState == newState) return;
-
-        // Detener coroutine anterior si existe
-        if (currentStateCoroutine != null)
-        {
-            StopCoroutine(currentStateCoroutine);
-            currentStateCoroutine = null;
-        }
-
-        State previousState = currentState;
-        currentState = newState;
-
-        // Notificar cambio de estado
-        ChangeState(newState.ToString());
-
-        // Notificar evento global de cambio de estado
-        if (enemyCore != null)
-        {
-            EnemyEvents.TriggerEnemyStateChanged(enemyCore, newState.ToString());
-        }
-
-        // Iniciar nuevo estado
-        switch (newState)
-        {
-            case State.Idle:
-                HandleIdleState();
-                break;
-
-            case State.Chasing:
-                HandleChaseState();
-                break;
-
-            case State.Attacking:
-                currentStateCoroutine = StartCoroutine(AttackCoroutine());
-                break;
-
-            case State.Retreating:
-                currentStateCoroutine = StartCoroutine(RetreatCoroutine());
-                break;
-
-            case State.Waiting:
-                currentStateCoroutine = StartCoroutine(WaitCoroutine());
-                break;
-        }
+        return Time.time >= lastAttackTime + attackCooldown;
     }
 
-    #endregion
-
-    #region State Handlers
-
-    void HandleIdleState()
+    private IEnumerator AttackCoroutine()
     {
-        // Detener movimiento
+        isExecutingAttack = true;
+        lastAttackTime = Time.time;
+
+        // Detenemos el movimiento
         if (movement != null)
         {
+            movement.StopMovement();
             movement.SetCanMove(false);
         }
 
-        EndBehavior();
+        // 1. Disparamos la animación a través del controlador
+        enemyAnimator?.TriggerAttack();
 
-        // Notificar que perdió al jugador
-        if (enemyCore != null)
-        {
-            EnemyEvents.TriggerEnemyLostPlayer(enemyCore);
-        }
-    }
+        // 2. La animación se reproduce y en el frame clave llamará a OnAttackHit()
+        // (a través del EnemyAnimationEventForwarder)
 
-    void HandleChaseState()
-    {
-        // Habilitar movimiento hacia el jugador
+        // 3. Esperamos un tiempo antes de que el enemigo pueda volver a moverse
+        yield return new WaitForSeconds(postAttackDelay);
+
         if (movement != null)
         {
             movement.SetCanMove(true);
         }
-
-        StartBehavior();
-
-        // Notificar que detectó al jugador
-        if (enemyCore != null)
-        {
-            EnemyEvents.TriggerEnemyDetectedPlayer(enemyCore);
-        }
+        isExecutingAttack = false;
     }
 
-    IEnumerator AttackCoroutine()
+    /// <summary>
+    /// ESTE MÉTODO ES PÚBLICO PARA SER LLAMADO DESDE UN ANIMATION EVENT.
+    /// Contiene la lógica de detección y aplicación de daño.
+    /// </summary>
+    public void OnAttackHit()
     {
-        isAttacking = true;
-        lastAttackTime = Time.time;
+        if (attackPoint == null) return;
 
-        // Detener movimiento
-        if (movement != null)
-        {
-            movement.SetCanMove(false);
-        }
+        if (showDebugInfo) Debug.Log($"[{name}] Animation Event 'OnAttackHit' disparado.");
 
-        // Reproducir animación de ataque
-        if (animator != null)
-        {
-            animator.SetTrigger(attackAnimationTrigger);
-        }
-
-        // Esperar un momento antes de hacer daño (sincronizar con animación)
-        yield return new WaitForSeconds(attackDuration * 0.5f);
-
-        // Ejecutar el ataque
-        PerformAttack();
-
-        // Esperar a que termine la animación
-        yield return new WaitForSeconds(attackDuration * 0.5f);
-
-        isAttacking = false;
-
-        // Transición a retroceso
-        ChangeToState(State.Retreating);
-    }
-
-    IEnumerator RetreatCoroutine()
-    {
-        // Calcular dirección de retroceso (alejándose del jugador)
-        Vector2 retreatDirection = -GetDirectionToPlayer();
-
-        // Forzar movimiento en dirección de retroceso
-        if (movement != null)
-        {
-            movement.ForceMove(retreatDirection, retreatDuration);
-        }
-
-        // Esperar a que termine el retroceso
-        yield return new WaitForSeconds(retreatDuration);
-
-        // Transición a espera
-        ChangeToState(State.Waiting);
-    }
-
-    IEnumerator WaitCoroutine()
-    {
-        // Mantener al enemigo quieto
-        if (movement != null)
-        {
-            movement.SetCanMove(false);
-        }
-
-        // Esperar
-        yield return new WaitForSeconds(retreatWaitTime);
-
-        // Volver a perseguir si el jugador sigue en rango
-        if (IsPlayerInRange(chaseRange))
-        {
-            ChangeToState(State.Chasing);
-        }
-        else
-        {
-            ChangeToState(State.Idle);
-        }
-    }
-
-    #endregion
-
-    #region State Transitions
-
-    void CheckForChaseTransition()
-    {
-        if (IsPlayerInRange(chaseRange) && CanAttack())
-        {
-            ChangeToState(State.Chasing);
-        }
-    }
-
-    void CheckForAttackTransition()
-    {
-        if (IsPlayerInRange(attackRange) && CanAttack())
-        {
-            ChangeToState(State.Attacking);
-        }
-    }
-
-    void CheckForIdleTransition()
-    {
-        if (!IsPlayerInRange(stopChaseRange))
-        {
-            ChangeToState(State.Idle);
-        }
-    }
-
-    #endregion
-
-    #region Attack System
-
-    bool CanAttack()
-    {
-        return Time.time - lastAttackTime >= attackCooldown && !isAttacking;
-    }
-
-    void PerformAttack()
-    {
-        // Calcular posición del ataque
-        Vector2 attackPosition = GetAttackPosition();
-
-        // Detectar jugador en el área de ataque
-        Collider2D[] hits = Physics2D.OverlapBoxAll(attackPosition, attackSize, 0f, playerLayer);
+        // Detectar colliders en el punto y radio de ataque
+        Collider2D[] hits = Physics2D.OverlapCircleAll(attackPoint.position, attackRadius, playerLayer);
 
         foreach (Collider2D hit in hits)
         {
-            // Buscar IDamageable en el jugador
             IDamageable damageable = hit.GetComponent<IDamageable>();
-            if (damageable == null && hit.transform.parent != null)
-            {
-                damageable = hit.GetComponentInParent<IDamageable>();
-            }
-
             if (damageable != null && damageable.IsAlive)
             {
-                // Aplicar daño
-                Vector3 hitPoint = hit.ClosestPoint(attackPosition);
-                damageable.TakeDamage((int)attackDamage, hitPoint, transform);
+                // Aplicamos daño al jugador
+                damageable.TakeDamage(attackDamage, hit.transform.position, transform);
 
-                // Registrar el daño hecho
+                // Registramos el daño para estadísticas
                 if (enemyCore != null)
                 {
-                    enemyCore.RegisterDamageDealt((int)attackDamage);
+                    enemyCore.RegisterDamageDealt(attackDamage);
                 }
 
-                if (showDebugInfo)
-                {
-                    Debug.Log($"[MeleeAttackBehavior] {name} golpeó al jugador con {attackDamage} de daño");
-                }
-            }
-        }
+                if (showDebugInfo) Debug.Log($"[{name}] golpeó a '{hit.name}' con {attackDamage} de daño.");
 
-        // Reproducir efecto de ataque si existe
-        if (attackEffect != null)
-        {
-            Instantiate(attackEffect, attackPosition, Quaternion.identity);
-        }
-    }
-
-    Vector2 GetAttackPosition()
-    {
-        // Ajustar offset según la dirección que mira el enemigo
-        float direction = transform.localScale.x > 0 ? 1f : -1f;
-        Vector2 adjustedOffset = new Vector2(attackOffset.x * direction, attackOffset.y);
-        return (Vector2)transform.position + adjustedOffset;
-    }
-
-    #endregion
-
-    #region Helper Methods
-
-    protected override void HandleDamageReceived(Vector3 hitPoint, Transform damageSource)
-    {
-        base.HandleDamageReceived(hitPoint, damageSource);
-
-        // Si estamos esperando o idle y nos atacan, perseguir inmediatamente
-        if (currentState == State.Idle || currentState == State.Waiting)
-        {
-            if (CanAttack())
-            {
-                ChangeToState(State.Chasing);
+                // Rompemos el bucle para aplicar daño solo una vez por ataque
+                break;
             }
         }
     }
-
-    #endregion
 
     #region Gizmos
-
     public override void DrawBehaviorGizmos()
     {
-        // Rango de persecución
-        Gizmos.color = new Color(0, 1, 0, 0.2f);
-        Gizmos.DrawWireSphere(transform.position, chaseRange);
-
-        // Rango de ataque
-        Gizmos.color = new Color(1, 0, 0, 0.3f);
+        // Rango para iniciar el ataque
+        Gizmos.color = new Color(1, 0.5f, 0, 0.2f); // Naranja
         Gizmos.DrawWireSphere(transform.position, attackRange);
 
-        // Área de ataque
-        Gizmos.color = Color.red;
-        Vector2 attackPos = GetAttackPosition();
-        Gizmos.DrawWireCube(attackPos, attackSize);
-
-        // Rango de detener persecución
-        Gizmos.color = new Color(1, 1, 0, 0.1f);
-        Gizmos.DrawWireSphere(transform.position, stopChaseRange);
-
-        // Estado actual
-        Vector3 statePos = transform.position + Vector3.up * 2.5f;
-#if UNITY_EDITOR
-        UnityEditor.Handles.Label(statePos, $"State: {currentState}");
-#endif
+        // Área de efecto del golpe
+        if (attackPoint != null)
+        {
+            Gizmos.color = Color.red;
+            Gizmos.DrawWireSphere(attackPoint.position, attackRadius);
+        }
     }
-
-    #endregion
-
-    #region Properties
-
-    public State CurrentState => currentState;
-    public bool IsAttacking => isAttacking;
-    public float AttackCooldownRemaining => Mathf.Max(0, attackCooldown - (Time.time - lastAttackTime));
-    public bool CanAttackNow => CanAttack();
-
     #endregion
 }
