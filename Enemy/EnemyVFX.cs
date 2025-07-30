@@ -1,12 +1,13 @@
-﻿using UnityEngine;
+// Enemy/EnemyVFX.cs
+using UnityEngine;
 using System.Collections;
 using System.Collections.Generic;
 
 /// <summary>
 /// Componente que maneja todos los efectos visuales de los enemigos.
-/// Ahora utiliza PREFABS para la fragmentación, dándote más control artístico.
+/// Ahora utiliza PREFABS para la fragmentación y busca el SpriteRenderer en hijos.
 /// </summary>
-[RequireComponent(typeof(SpriteRenderer))]
+[RequireComponent(typeof(EnemyCore))] // Cambiado para requerir EnemyCore en lugar de SpriteRenderer
 public class EnemyVFX : MonoBehaviour
 {
     [Header("═══════════════════════════════════════")]
@@ -49,9 +50,6 @@ public class EnemyVFX : MonoBehaviour
     [Tooltip("Duración del desvanecimiento")]
     [SerializeField] private float fragmentFadeDuration = 0.5f;
 
-    // --- FIN DE LA NUEVA SECCIÓN ---
-
-
     // Referencias
     private SpriteRenderer spriteRenderer;
     private Material material;
@@ -79,21 +77,28 @@ public class EnemyVFX : MonoBehaviour
 
     void InitializeComponents()
     {
-        spriteRenderer = GetComponent<SpriteRenderer>();
+        // === CAMBIO CLAVE AQUÍ ===
+        // Buscamos el SpriteRenderer en este componente O en CUALQUIERA de sus hijos.
+        spriteRenderer = GetComponentInChildren<SpriteRenderer>();
+
         enemyCore = GetComponent<EnemyCore>();
 
-        // Crear instancia del material para que el flash no afecte a otros enemigos
-        if (spriteRenderer != null)
+        // Si después de buscar no se encuentra, lanzamos un error claro.
+        if (spriteRenderer == null)
         {
-            material = spriteRenderer.material;
-            if (!material.name.Contains("Instance"))
-            {
-                material = new Material(material);
-                spriteRenderer.material = material;
-            }
-            flashAmountID = Shader.PropertyToID("_FlashAmount");
-            material.SetFloat(flashAmountID, 0f);
+            Debug.LogError($"[EnemyVFX] en '{gameObject.name}': No se encontró un SpriteRenderer en este objeto ni en sus hijos. Los efectos visuales no funcionarán.", this);
+            return; // Detenemos la inicialización si no hay renderer.
         }
+
+        // Crear instancia del material para que el flash no afecte a otros enemigos
+        material = spriteRenderer.material;
+        if (!material.name.Contains("Instance"))
+        {
+            material = new Material(material);
+            spriteRenderer.material = material;
+        }
+        flashAmountID = Shader.PropertyToID("_FlashAmount");
+        material.SetFloat(flashAmountID, 0f);
     }
 
     void SubscribeToEvents()
@@ -173,9 +178,6 @@ public class EnemyVFX : MonoBehaviour
         }
     }
 
-    /// <summary>
-    /// NUEVO MÉTODO: Instancia los prefabs de fragmentos, les aplica la física y configura su ciclo de vida.
-    /// </summary>
     void CreateFragmentsFromPrefabs()
     {
         if (fragmentPrefabs == null || fragmentPrefabs.Length == 0) return;
@@ -186,11 +188,9 @@ public class EnemyVFX : MonoBehaviour
         {
             if (prefab == null) continue;
 
-            // 1. Instanciar el prefab en la posición del enemigo con una rotación aleatoria
             Quaternion randomRotation = Quaternion.Euler(0, 0, Random.Range(-fragmentRotationRange, fragmentRotationRange));
             GameObject fragment = Instantiate(prefab, transform.position, randomRotation);
 
-            // 2. Configurar su ciclo de vida usando el script FragmentLifecycle.cs
             FragmentLifecycle lifecycle = fragment.GetComponent<FragmentLifecycle>();
             if (lifecycle != null)
             {
@@ -198,11 +198,9 @@ public class EnemyVFX : MonoBehaviour
                 lifecycle.fadeDuration = this.fragmentFadeDuration;
             }
 
-            // 3. Aplicar física
             Rigidbody2D rb = fragment.GetComponent<Rigidbody2D>();
             if (rb != null)
             {
-                // Calcula una dirección de explosión que se aleja del centro con un toque aleatorio
                 Vector3 direction = (fragment.transform.position - explosionCenter).normalized + (Vector3)Random.insideUnitCircle * 0.5f;
                 rb.AddForce(direction.normalized * explosionForce, ForceMode2D.Impulse);
             }
