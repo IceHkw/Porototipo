@@ -1,144 +1,476 @@
 using UnityEngine;
-using System.Collections;
+using System;
 
 /// <summary>
-/// Comportamiento de ataque melee que se activa mediante Animation Events.
+/// Componente núcleo que todo enemigo debe tener. Maneja salud, daño y referencias básicas.
 /// </summary>
-public class MeleeAttackBehavior : EnemyBehaviorBase
+[RequireComponent(typeof(Rigidbody2D))]
+public class EnemyCore : MonoBehaviour, IDamageable, IPoolable
 {
-    [Header("Attack Settings")]
-    [SerializeField] private float attackRange = 1.5f;
-    [SerializeField] private int attackDamage = 1;
-    [SerializeField] private float attackCooldown = 2f;
+    [Header("Enemy Stats")]
+    [SerializeField] private int maxHealth = 3;
+    [SerializeField] private int currentHealth;
 
-    [Header("Attack Area (Configurable)")]
-    [Tooltip("El punto desde donde se origina el ataque. Debe ser un Transform hijo del enemigo.")]
-    [SerializeField] private Transform attackPoint;
-    [SerializeField] private float attackRadius = 0.5f;
-    [SerializeField] private LayerMask playerLayer = -1;
+    [Header("References")]
+    public Transform player;
+    [HideInInspector] public Rigidbody2D rb;
 
-    [Header("Timing")]
-    [Tooltip("Tiempo que el enemigo se detiene después de iniciar el ataque.")]
-    [SerializeField] private float postAttackDelay = 0.75f;
+    [Header("Combat")]
+    public float invulnerabilityDuration = 0.5f;
+    private bool isInvulnerable = false;
+    private float invulnerabilityTimer = 0f;
 
-    // Referencia al controlador de animaciones
-    private EnemyAnimatorController enemyAnimator;
+    [Header("Knockback")]
+    public float knockbackForce = 5f;
+    public float knockbackDuration = 0.2f;
+    private bool isKnockedBack = false;
+    private float knockbackTimer = 0f;
+
+    [Header("Death")]
+    public GameObject deathEffect;
+    public float deathDelay = 0f;
+
+    [Header("Stats Tracking")]
+    private float spawnTime;
+    private int totalDamageDealt = 0;
+
+    [Header("Debug")]
+    public bool showDebugInfo = false;
+
+    // Eventos
+    public event Action<int, int> OnHealthChanged; // current, max
+    public event Action<Vector3, Transform> OnDamageReceived;
+    public event Action OnDeath;
+    public event Action OnKnockbackStart;
+    public event Action OnKnockbackEnd;
 
     // Estado
-    private float lastAttackTime = -10f;
-    private bool isExecutingAttack = false;
+    private bool isDead = false;
+    private Vector3 knockbackVelocity;
+
+    // Pool
+    private bool isActiveInPool = false;
+    private string poolType = PoolObjectTypes.ENEMY_BASIC;
+
+    // Componentes opcionales
+    private SpriteRenderer spriteRenderer;
+    private EnemyAnimatorController enemyAnimatorController;
+    private Animator animator;
+    private EnemyVFX enemyVFX;
+
+    #region Unity Lifecycle
+
+    void Awake()
+    {
+        InitializeComponents();
+    }
+
+    void Start()
+    {
+        if (player == null)
+        {
+            FindPlayer();
+        }
+
+        currentHealth = maxHealth;
+    }
+
+    void Update()
+    {
+        HandleTimers();
+    }
+
+    void FixedUpdate()
+    {
+        HandleKnockback();
+    }
+
+    #endregion
 
     #region Initialization
-    protected override void OnStart()
-    {
-        // Buscamos el controlador de animaciones en los hijos
-        enemyAnimator = GetComponentInChildren<EnemyAnimatorController>();
 
-        if (attackPoint == null)
+    void InitializeComponents()
+    {
+        rb = GetComponent<Rigidbody2D>();
+        spriteRenderer = GetComponent<SpriteRenderer>();
+        enemyAnimatorController = GetComponentInChildren<EnemyAnimatorController>();
+        animator = GetComponent<Animator>();
+        enemyVFX = GetComponent<EnemyVFX>();
+
+        // Configurar Rigidbody2D
+        if (rb != null)
         {
-            Debug.LogError($"[MeleeAttackBehavior] en '{gameObject.name}': El 'attackPoint' no está asignado en el Inspector.", this);
-            enableBehavior = false; // Deshabilitamos el script si no está bien configurado
+            rb.gravityScale = 1f;
+            rb.freezeRotation = true;
         }
     }
 
-    protected override void OnCleanup() { }
+    void FindPlayer()
+    {
+        GameObject playerObj = GameObject.FindGameObjectWithTag("Player");
+        if (playerObj != null)
+        {
+            player = playerObj.transform;
+        }
+    }
+
     #endregion
 
-    #region Behavior Update
-    protected override void UpdateBehavior()
-    {
-        // No hacer nada si ya estamos en medio de un ataque
-        if (isExecutingAttack) return;
+    #region IDamageable Implementation
 
-        // Si el jugador está en rango y no estamos en cooldown, atacamos
-        if (IsPlayerInRange(attackRange) && CanAttack())
-        {
-            StartCoroutine(AttackCoroutine());
-        }
-    }
-    #endregion
-
-    private bool CanAttack()
+    public void TakeDamage(int damage)
     {
-        return Time.time >= lastAttackTime + attackCooldown;
+        TakeDamage(damage, transform.position, null);
     }
 
-    private IEnumerator AttackCoroutine()
+    public void TakeDamage(int damage, Vector3 hitPoint, Transform damageSource)
     {
-        isExecutingAttack = true;
-        lastAttackTime = Time.time;
+        if (isDead || isInvulnerable) return;
 
-        // Detenemos el movimiento
-        if (movement != null)
+        currentHealth = Mathf.Max(0, currentHealth - damage);
+        OnHealthChanged?.Invoke(currentHealth, maxHealth);
+        OnDamageReceived?.Invoke(hitPoint, damageSource);
+
+        // Disparar evento global de daño
+        EnemyEvents.TriggerEnemyDamaged(this, damage, hitPoint, damageSource);
+
+        // Activar invulnerabilidad temporal
+        StartInvulnerability();
+
+        // Aplicar knockback si hay fuente de daño
+        if (damageSource != null && knockbackForce > 0)
         {
-            movement.StopMovement();
-            movement.SetCanMove(false);
+            ApplyKnockback(damageSource.position);
         }
 
-        // 1. Disparamos la animación a través del controlador
-        enemyAnimator?.TriggerAttack();
+        // Efectos visuales
+        PlayHitEffects();
 
-        // 2. La animación se reproduce y en el frame clave llamará a OnAttackHit()
-        // (a través del EnemyAnimationEventForwarder)
-
-        // 3. Esperamos un tiempo antes de que el enemigo pueda volver a moverse
-        yield return new WaitForSeconds(postAttackDelay);
-
-        if (movement != null)
+        // Verificar muerte
+        if (currentHealth <= 0)
         {
-            movement.SetCanMove(true);
-        }
-        isExecutingAttack = false;
-    }
+            // Verificar si fue el jugador quien mató ANTES de Die()
+            bool killedByPlayer = damageSource != null && damageSource.CompareTag("Player");
+            Transform killer = killedByPlayer ? damageSource : null;
 
-    /// <summary>
-    /// ESTE MÉTODO ES PÚBLICO PARA SER LLAMADO DESDE UN ANIMATION EVENT.
-    /// Contiene la lógica de detección y aplicación de daño.
-    /// </summary>
-    public void OnAttackHit()
-    {
-        if (attackPoint == null) return;
+            Die();
 
-        if (showDebugInfo) Debug.Log($"[{name}] Animation Event 'OnAttackHit' disparado.");
-
-        // Detectar colliders en el punto y radio de ataque
-        Collider2D[] hits = Physics2D.OverlapCircleAll(attackPoint.position, attackRadius, playerLayer);
-
-        foreach (Collider2D hit in hits)
-        {
-            IDamageable damageable = hit.GetComponent<IDamageable>();
-            if (damageable != null && damageable.IsAlive)
+            // Disparar evento específico de muerte por jugador DESPUÉS de Die()
+            if (killedByPlayer)
             {
-                // Aplicamos daño al jugador
-                damageable.TakeDamage(attackDamage, hit.transform.position, transform);
+                EnemyEvents.TriggerEnemyKilledByPlayer(this, killer);
+            }
+        }
 
-                // Registramos el daño para estadísticas
-                if (enemyCore != null)
-                {
-                    enemyCore.RegisterDamageDealt(attackDamage);
-                }
+        if (showDebugInfo)
+        {
+            Debug.Log($"[EnemyCore] {name} recibió {damage} de daño. Salud: {currentHealth}/{maxHealth}");
+        }
+    }
 
-                if (showDebugInfo) Debug.Log($"[{name}] golpeó a '{hit.name}' con {attackDamage} de daño.");
+    public bool IsAlive => !isDead && currentHealth > 0;
+    public int CurrentHealth => currentHealth;
+    public int MaxHealth => maxHealth;
+    public Transform Transform => transform;
+    public Vector3 Position => transform.position;
 
-                // Rompemos el bucle para aplicar daño solo una vez por ataque
-                break;
+    #endregion
+
+    #region IPoolable Implementation
+
+    public void OnSpawnFromPool(Vector3 position, Quaternion rotation)
+    {
+        transform.position = position;
+        transform.rotation = rotation;
+
+        // Resetear estado
+        isDead = false;
+        currentHealth = maxHealth;
+        isInvulnerable = false;
+        isKnockedBack = false;
+        invulnerabilityTimer = 0f;
+        knockbackTimer = 0f;
+        spawnTime = Time.time;
+        totalDamageDealt = 0;
+
+        // Reactivar componentes
+        if (rb != null)
+        {
+            rb.linearVelocity = Vector2.zero;
+            rb.simulated = true;
+        }
+
+        if (spriteRenderer != null)
+        {
+            spriteRenderer.enabled = true;
+            Color c = spriteRenderer.color;
+            c.a = 1f;
+            spriteRenderer.color = c;
+        }
+
+        if (enemyVFX != null)
+        {
+            enemyVFX.ResetVisualState();
+        }
+
+        // Buscar jugador si no está asignado
+        if (player == null)
+        {
+            FindPlayer();
+        }
+
+        isActiveInPool = true;
+        gameObject.SetActive(true);
+
+        OnHealthChanged?.Invoke(currentHealth, maxHealth);
+
+        // Disparar evento de spawn
+        EnemyEvents.TriggerEnemySpawned(this);
+    }
+
+    public void OnReturnToPool()
+    {
+        // << LÍNEA CORREGIDA >>
+        // Se ha eliminado la llamada recursiva a ObjectPoolManager.Instance.Return(gameObject);
+        // Ahora este método solo se encarga de resetear el estado del enemigo.
+
+        isActiveInPool = false;
+
+        // Disparar evento de retorno al pool
+        EnemyEvents.TriggerEnemyReturnedToPool(this);
+
+        // Limpiar eventos
+        OnHealthChanged = null;
+        OnDamageReceived = null;
+        OnDeath = null;
+        OnKnockbackStart = null;
+        OnKnockbackEnd = null;
+
+        gameObject.SetActive(false);
+    }
+
+    public bool IsActiveInPool => isActiveInPool;
+    public GameObject PooledGameObject => gameObject;
+    public string PoolObjectType => poolType;
+
+    #endregion
+
+    #region Combat Methods
+
+    void StartInvulnerability()
+    {
+        isInvulnerable = true;
+        invulnerabilityTimer = invulnerabilityDuration;
+    }
+
+    void ApplyKnockback(Vector3 damageSourcePosition)
+    {
+        if (isKnockedBack) return;
+
+        Vector2 knockbackDirection = (transform.position - damageSourcePosition).normalized;
+        knockbackVelocity = knockbackDirection * knockbackForce;
+
+        isKnockedBack = true;
+        knockbackTimer = knockbackDuration;
+
+        OnKnockbackStart?.Invoke();
+    }
+
+    void HandleKnockback()
+    {
+        if (!isKnockedBack || rb == null) return;
+
+        // Aplicar velocidad de knockback gradualmente
+        float knockbackProgress = 1f - (knockbackTimer / knockbackDuration);
+        Vector2 currentKnockback = Vector2.Lerp(knockbackVelocity, Vector2.zero, knockbackProgress);
+
+        rb.linearVelocity = new Vector2(currentKnockback.x, rb.linearVelocity.y);
+    }
+
+    void PlayHitEffects()
+    {
+        // Si tenemos EnemyVFX, él se encarga de los efectos
+        if (enemyVFX != null)
+        {
+            // EnemyVFX maneja el flash automáticamente a través del evento OnDamageReceived
+            return;
+        }
+
+        // Fallback: Flash de daño manual si no hay EnemyVFX
+        if (spriteRenderer != null)
+        {
+            StartCoroutine(DamageFlash());
+        }
+
+        // Animación de daño
+        if (animator != null)
+        {
+            animator.SetTrigger("Hit");
+        }
+    }
+
+    System.Collections.IEnumerator DamageFlash()
+    {
+        if (spriteRenderer == null) yield break;
+
+        Color originalColor = spriteRenderer.color;
+        float flashDuration = 0.1f;
+        float elapsed = 0f;
+
+        while (elapsed < flashDuration)
+        {
+            elapsed += Time.deltaTime;
+            float t = Mathf.PingPong(elapsed * 4f, 1f);
+            spriteRenderer.color = Color.Lerp(originalColor, Color.red, t);
+            yield return null;
+        }
+
+        spriteRenderer.color = originalColor;
+    }
+
+    void Die()
+    {
+        if (isDead) return;
+
+        isDead = true;
+        OnDeath?.Invoke();
+
+        // Disparar evento global de muerte
+        EnemyEvents.TriggerEnemyDeath(this);
+
+        // Desactivar física
+        if (rb != null)
+        {
+            rb.simulated = false;
+        }
+
+        // Reproducir efectos de muerte
+        if (deathEffect != null)
+        {
+            Instantiate(deathEffect, transform.position, Quaternion.identity);
+        }
+
+        // Animación de muerte
+        if (animator != null)
+        {
+            animator.SetTrigger("Death");
+        }
+
+        // Devolver al pool o destruir
+        if (ObjectPoolManager.Instance != null && ObjectPoolManager.Instance.PoolExists(poolType))
+        {
+            Invoke(nameof(ReturnToPool), deathDelay);
+        }
+        else
+        {
+            Destroy(gameObject, deathDelay);
+        }
+    }
+
+    void ReturnToPool()
+    {
+        if (ObjectPoolManager.Instance != null)
+        {
+            ObjectPoolManager.Instance.Return(gameObject);
+        }
+        else
+        {
+            Destroy(gameObject);
+        }
+    }
+
+    #endregion
+
+    #region Timer Management
+
+    void HandleTimers()
+    {
+        // Timer de invulnerabilidad
+        if (isInvulnerable)
+        {
+            invulnerabilityTimer -= Time.deltaTime;
+            if (invulnerabilityTimer <= 0f)
+            {
+                isInvulnerable = false;
+            }
+        }
+
+        // Timer de knockback
+        if (isKnockedBack)
+        {
+            knockbackTimer -= Time.deltaTime;
+            if (knockbackTimer <= 0f)
+            {
+                isKnockedBack = false;
+                OnKnockbackEnd?.Invoke();
             }
         }
     }
 
-    #region Gizmos
-    public override void DrawBehaviorGizmos()
-    {
-        // Rango para iniciar el ataque
-        Gizmos.color = new Color(1, 0.5f, 0, 0.2f); // Naranja
-        Gizmos.DrawWireSphere(transform.position, attackRange);
+    #endregion
 
-        // Área de efecto del golpe
-        if (attackPoint != null)
+    #region Public Methods
+
+    public void SetPoolType(string type)
+    {
+        poolType = type;
+    }
+
+    public void Heal(int amount)
+    {
+        if (isDead) return;
+
+        currentHealth = Mathf.Min(currentHealth + amount, maxHealth);
+        OnHealthChanged?.Invoke(currentHealth, maxHealth);
+    }
+
+    public void SetMaxHealth(int newMaxHealth)
+    {
+        maxHealth = newMaxHealth;
+        currentHealth = Mathf.Min(currentHealth, maxHealth);
+        OnHealthChanged?.Invoke(currentHealth, maxHealth);
+    }
+
+    public bool IsKnockedBack => isKnockedBack;
+    public bool IsInvulnerable => isInvulnerable;
+    public bool IsDead => isDead;
+    public float AliveTime => isDead ? 0f : Time.time - spawnTime;
+    public int TotalDamageDealt => totalDamageDealt;
+
+    /// <summary>
+    /// Registra daño hecho por este enemigo (llamado por comportamientos de ataque)
+    /// </summary>
+    public void RegisterDamageDealt(int damage)
+    {
+        totalDamageDealt += damage;
+        EnemyEvents.TriggerEnemyAttackHit(this, damage);
+    }
+
+    #endregion
+
+    #region Debug
+
+    void OnDrawGizmosSelected()
+    {
+        if (!showDebugInfo) return;
+
+        // Mostrar información de salud
+        Vector3 healthPos = transform.position + Vector3.up * 2f;
+        UnityEditor.Handles.Label(healthPos, $"Health: {currentHealth}/{maxHealth}");
+
+        // Mostrar estado
+        if (isInvulnerable)
+        {
+            Gizmos.color = Color.yellow;
+            Gizmos.DrawWireSphere(transform.position, 0.5f);
+        }
+
+        if (isKnockedBack)
         {
             Gizmos.color = Color.red;
-            Gizmos.DrawWireSphere(attackPoint.position, attackRadius);
+            Gizmos.DrawLine(transform.position, transform.position + (Vector3)knockbackVelocity.normalized);
         }
     }
+
     #endregion
 }
