@@ -1,7 +1,7 @@
-﻿using UnityEngine;
+using UnityEngine;
 using System.Collections;
 using System.Collections.Generic;
-
+using System.Linq; // Necesario para RemoveAll
 
 public class EnemySpawner : MonoBehaviour
 {
@@ -43,6 +43,19 @@ public class EnemySpawner : MonoBehaviour
 
     [Tooltip("Radio para verificar espacio libre al spawnear")]
     public float spawnCheckRadius = 0.5f;
+
+    [Header("═══════════════════════════════════════")]
+    [Header("SISTEMA DE DESATASCO (UNSTUCK)")]
+    [Header("═══════════════════════════════════════")]
+
+    [Tooltip("Habilita el sistema que despawnea enemigos atascados fuera de pantalla.")]
+    [SerializeField] private bool enableUnstuckSystem = true;
+
+    [Tooltip("Tiempo máximo que un enemigo puede estar fuera de la vista antes de ser despawneado.")]
+    [SerializeField] private float maxTimeOffScreen = 10f;
+
+    [Tooltip("Intervalo en segundos para verificar los enemigos fuera de pantalla.")]
+    [SerializeField] private float unstuckCheckInterval = 2f;
 
     [Header("═══════════════════════════════════════")]
     [Header("CONFIGURACIÓN GENERAL")]
@@ -115,6 +128,11 @@ public class EnemySpawner : MonoBehaviour
     private float cameraHalfWidth;
     private float cameraHalfHeight;
 
+    // Variables para desatasco
+    private List<GameObject> activeEnemies = new List<GameObject>();
+    private Dictionary<GameObject, float> offScreenTimers = new Dictionary<GameObject, float>();
+    private float nextUnstuckCheck;
+
     // Referencias del sistema
     private GameManager gameManager;
     private LevelManager levelManager;
@@ -137,12 +155,10 @@ public class EnemySpawner : MonoBehaviour
 
     void InitializeSpawner()
     {
-        // Buscar referencias del sistema
         gameManager = GameManager.Instance;
         levelManager = LevelManager.Instance;
         poolManager = ObjectPoolManager.Instance;
 
-        // Buscar cámara si no está asignada
         if (mainCamera == null)
         {
             mainCamera = Camera.main;
@@ -152,11 +168,9 @@ public class EnemySpawner : MonoBehaviour
             }
         }
 
-        // Validar configuración
         ValidateSpawnConfiguration();
         CalculateTotalSpawnWeight();
 
-        // Inicializar estadísticas
         foreach (var config in enemyConfigs)
         {
             if (!string.IsNullOrEmpty(config.poolID))
@@ -165,11 +179,9 @@ public class EnemySpawner : MonoBehaviour
             }
         }
 
-        // Suscribirse a eventos del sistema
         SubscribeToSystemEvents();
-
-        // Configurar estado inicial
         SetupInitialState();
+        nextUnstuckCheck = Time.time + unstuckCheckInterval;
 
         string poolStatus = poolManager != null ? "Pool Manager encontrado" : "Pool Manager no encontrado";
         DebugLog($"EnemySpawner dinámico inicializado | {poolStatus}");
@@ -177,10 +189,8 @@ public class EnemySpawner : MonoBehaviour
 
     void Update()
     {
-        // Actualizar referencias de cámara
         UpdateCameraInfo();
 
-        // Buscar jugador si no lo tenemos
         if (playerTransform == null)
         {
             GameObject player = GameObject.FindWithTag("Player");
@@ -190,24 +200,25 @@ public class EnemySpawner : MonoBehaviour
             }
         }
 
-        // Verificar estado del juego antes de procesar
         if (!ShouldProcessSpawning()) return;
 
-        // Verificar si es tiempo de spawnear un nuevo enemigo
         if (Time.time >= nextSpawnTime && CanSpawn())
         {
             AttemptDynamicSpawn();
             nextSpawnTime = Time.time + spawnInterval;
         }
 
-        // Ya no actualizamos el conteo aquí - se maneja por eventos
+        if (enableUnstuckSystem && Time.time >= nextUnstuckCheck)
+        {
+            CheckForOffScreenEnemies();
+            nextUnstuckCheck = Time.time + unstuckCheckInterval;
+        }
     }
 
     void UpdateCameraInfo()
     {
         if (mainCamera == null) return;
 
-        // Calcular dimensiones de la cámara en unidades del mundo
         cameraHalfHeight = mainCamera.orthographicSize;
         cameraHalfWidth = cameraHalfHeight * mainCamera.aspect;
     }
@@ -216,7 +227,6 @@ public class EnemySpawner : MonoBehaviour
     {
         if (playerTransform == null || mainCamera == null) return;
 
-        // Calcular puntos de spawn válidos
         CalculateValidSpawnPoints();
 
         if (validSpawnPoints.Count == 0)
@@ -226,10 +236,7 @@ public class EnemySpawner : MonoBehaviour
             return;
         }
 
-        // Seleccionar un punto aleatorio de los válidos
         Vector2 spawnPosition = validSpawnPoints[Random.Range(0, validSpawnPoints.Count)];
-
-        // Seleccionar tipo de enemigo
         EnemySpawnConfig selectedConfig = SelectEnemyType();
         if (selectedConfig == null || string.IsNullOrEmpty(selectedConfig.poolID))
         {
@@ -238,7 +245,6 @@ public class EnemySpawner : MonoBehaviour
             return;
         }
 
-        // Intentar spawnear desde pool
         GameObject newEnemy = poolManager.SpawnWithConfig(
             selectedConfig.poolID,
             spawnPosition,
@@ -251,6 +257,7 @@ public class EnemySpawner : MonoBehaviour
             currentEnemyCount++;
             totalSpawned++;
             spawnedByType[selectedConfig.poolID]++;
+            activeEnemies.Add(newEnemy);
 
             DebugLog($"Enemigo '{selectedConfig.poolID}' spawneado en: {spawnPosition} " +
                     $"(Total: {currentEnemyCount}/{maxEnemies})");
@@ -262,14 +269,62 @@ public class EnemySpawner : MonoBehaviour
         }
     }
 
+    void CheckForOffScreenEnemies()
+    {
+        if (mainCamera == null) return;
+
+        Plane[] planes = GeometryUtility.CalculateFrustumPlanes(mainCamera);
+
+        // Se itera sobre una copia para poder modificar la lista original de forma segura si es necesario.
+        foreach (GameObject enemy in new List<GameObject>(activeEnemies))
+        {
+            // Si el enemigo es nulo (fue destruido por otro medio), se salta.
+            if (enemy == null || !enemy.activeInHierarchy)
+            {
+                continue;
+            }
+
+            Collider2D enemyCollider = enemy.GetComponent<Collider2D>();
+            if (enemyCollider == null) continue;
+
+            // Comprueba si el enemigo está en pantalla
+            if (GeometryUtility.TestPlanesAABB(planes, enemyCollider.bounds))
+            {
+                // Si está en pantalla, nos aseguramos de que no tenga un temporizador activo.
+                // Se comprueba si la clave existe antes de intentar eliminarla.
+                if (offScreenTimers.ContainsKey(enemy))
+                {
+                    offScreenTimers.Remove(enemy);
+                }
+            }
+            else
+            {
+                // Si está fuera de pantalla, se actualiza su temporizador.
+                if (!offScreenTimers.ContainsKey(enemy))
+                {
+                    offScreenTimers[enemy] = 0f;
+                }
+                offScreenTimers[enemy] += unstuckCheckInterval;
+
+                // Si el tiempo supera el máximo, se devuelve al pool.
+                if (offScreenTimers[enemy] >= maxTimeOffScreen)
+                {
+                    DebugLog($"Enemigo '{enemy.name}' despawneado por estar fuera de pantalla mucho tiempo.");
+                    poolManager.Return(enemy); // Esto activará OnEnemyDeath, que lo eliminará de las listas.
+                }
+            }
+        }
+
+        // Limpieza final: elimina cualquier referencia nula de la lista de activos.
+        activeEnemies.RemoveAll(item => item == null);
+    }
+
     void ConfigureSpawnedEnemy(GameObject enemy, EnemySpawnConfig config)
     {
-        // Asegurar que tenga el tag correcto
         if (!enemy.CompareTag("Enemy"))
         {
             enemy.tag = "Enemy";
         }
-
     }
 
     void CalculateValidSpawnPoints()
@@ -279,13 +334,11 @@ public class EnemySpawner : MonoBehaviour
         Vector3 cameraPos = mainCamera.transform.position;
         Vector3 playerPos = playerTransform.position;
 
-        // Calcular límites del anillo de spawn
         float leftCameraEdge = cameraPos.x - cameraHalfWidth;
         float rightCameraEdge = cameraPos.x + cameraHalfWidth;
         float topCameraEdge = cameraPos.y + cameraHalfHeight;
         float bottomCameraEdge = cameraPos.y - cameraHalfHeight;
 
-        // Determinar dirección del jugador (para bias de spawn)
         float playerVelocityX = 0f;
         Rigidbody2D playerRb = playerTransform.GetComponent<Rigidbody2D>();
         if (playerRb != null)
@@ -293,57 +346,43 @@ public class EnemySpawner : MonoBehaviour
             playerVelocityX = playerRb.linearVelocity.x;
         }
 
-        // Probar puntos en ambos lados si está habilitado
         if (spawnBothSides || Mathf.Abs(playerVelocityX) < 0.1f)
         {
-            // Lado izquierdo
             TryAddSpawnPointsOnSide(
                 leftCameraEdge - maxSpawnDistanceFromCamera,
                 leftCameraEdge - minSpawnDistanceFromCamera,
-                bottomCameraEdge,
-                topCameraEdge,
+                bottomCameraEdge, topCameraEdge,
                 playerVelocityX < 0 ? forwardSpawnBias : 1f - forwardSpawnBias
             );
-
-            // Lado derecho
             TryAddSpawnPointsOnSide(
                 rightCameraEdge + minSpawnDistanceFromCamera,
                 rightCameraEdge + maxSpawnDistanceFromCamera,
-                bottomCameraEdge,
-                topCameraEdge,
+                bottomCameraEdge, topCameraEdge,
                 playerVelocityX > 0 ? forwardSpawnBias : 1f - forwardSpawnBias
             );
         }
         else if (playerVelocityX > 0)
         {
-            // Solo spawn adelante (derecha)
             TryAddSpawnPointsOnSide(
                 rightCameraEdge + minSpawnDistanceFromCamera,
                 rightCameraEdge + maxSpawnDistanceFromCamera,
-                bottomCameraEdge,
-                topCameraEdge,
-                1f
+                bottomCameraEdge, topCameraEdge, 1f
             );
         }
         else
         {
-            // Solo spawn adelante (izquierda)
             TryAddSpawnPointsOnSide(
                 leftCameraEdge - maxSpawnDistanceFromCamera,
                 leftCameraEdge - minSpawnDistanceFromCamera,
-                bottomCameraEdge,
-                topCameraEdge,
-                1f
+                bottomCameraEdge, topCameraEdge, 1f
             );
         }
     }
 
     void TryAddSpawnPointsOnSide(float xMin, float xMax, float yMin, float yMax, float probability)
     {
-        // Saltar este lado si la probabilidad no se cumple
         if (Random.value > probability) return;
 
-        // Intentar varios puntos en este lado
         int attemptsPerSide = 5;
         for (int i = 0; i < attemptsPerSide; i++)
         {
@@ -362,26 +401,12 @@ public class EnemySpawner : MonoBehaviour
 
     Vector2? FindValidGroundPoint(Vector2 startPoint)
     {
-        // Raycast hacia abajo para encontrar superficie
-        RaycastHit2D hit = Physics2D.Raycast(
-            startPoint,
-            Vector2.down,
-            maxGroundCheckDistance,
-            groundLayers
-        );
+        RaycastHit2D hit = Physics2D.Raycast(startPoint, Vector2.down, maxGroundCheckDistance, groundLayers);
 
         if (hit.collider != null)
         {
             Vector2 groundPoint = hit.point + Vector2.up * spawnHeightOffset;
-
-            // Verificar que hay espacio libre para spawnear
-            int overlaps = Physics2D.OverlapCircleNonAlloc(
-                groundPoint,
-                spawnCheckRadius,
-                overlapResults,
-                ~groundLayers // Todo excepto las capas de suelo
-            );
-
+            int overlaps = Physics2D.OverlapCircleNonAlloc(groundPoint, spawnCheckRadius, overlapResults, ~groundLayers);
             if (overlaps == 0)
             {
                 return groundPoint;
@@ -450,7 +475,6 @@ public class EnemySpawner : MonoBehaviour
             poolManager.OnPoolManagerInitialized += OnPoolManagerReady;
         }
 
-        // NUEVO: Suscribirse a eventos de muerte de enemigos
         EnemyEvents.OnEnemyDeath += OnEnemyDeath;
         EnemyEvents.OnEnemyReturnedToPool += OnEnemyReturnedToPool;
     }
@@ -473,12 +497,10 @@ public class EnemySpawner : MonoBehaviour
             poolManager.OnPoolManagerInitialized -= OnPoolManagerReady;
         }
 
-        // NUEVO: Desuscribirse de eventos de enemigos
         EnemyEvents.OnEnemyDeath -= OnEnemyDeath;
         EnemyEvents.OnEnemyReturnedToPool -= OnEnemyReturnedToPool;
     }
 
-    // NUEVO: Manejar muerte de enemigos
     void OnEnemyDeath(EnemyCore enemy)
     {
         if (currentEnemyCount > 0)
@@ -486,13 +508,17 @@ public class EnemySpawner : MonoBehaviour
             currentEnemyCount--;
             DebugLog($"Enemigo murió. Contador actualizado: {currentEnemyCount}/{maxEnemies}");
         }
+
+        if (enemy != null)
+        {
+            activeEnemies.Remove(enemy.gameObject);
+            offScreenTimers.Remove(enemy.gameObject);
+        }
     }
 
-    // NUEVO: Manejar retorno al pool
     void OnEnemyReturnedToPool(EnemyCore enemy)
     {
-        // Este evento se dispara después de la muerte, así que no necesitamos hacer nada aquí
-        // ya que el contador se actualizó en OnEnemyDeath
+        // El contador ya se actualiza en OnEnemyDeath
     }
 
     void SetupInitialState()
@@ -516,14 +542,12 @@ public class EnemySpawner : MonoBehaviour
     bool ShouldProcessSpawning()
     {
         if (!canSpawnEnemies) return false;
-
         if (gameManager != null)
         {
             if (gameManager.EstaInicializando) return false;
             if (pauseOnGameOver && gameManager.EstaEnGameOver) return false;
             if (gameManager.EstaPausado) return false;
         }
-
         return true;
     }
 
@@ -534,43 +558,25 @@ public class EnemySpawner : MonoBehaviour
         if (!levelReady && waitForLevelReady) return false;
         if (playerTransform == null) return false;
         if (mainCamera == null) return false;
-
         return true;
     }
 
     bool HasValidSpawnTypes()
     {
-        // Si el pool manager no está listo, no podemos spawnear.
-        if (poolManager == null || !poolManager.IsInitialized)
-        {
-            return false;
-        }
-
-        // Verificamos si existe AL MENOS un tipo de enemigo configurado,
-        // habilitado y con un peso de spawn válido.
+        if (poolManager == null || !poolManager.IsInitialized) return false;
         foreach (var config in enemyConfigs)
         {
-            if (config.enabled && !string.IsNullOrEmpty(config.poolID) && config.spawnWeight > 0)
-            {
-                // Con que uno sea válido, es suficiente para intentar el spawn.
-                // El ObjectPoolManager se encargará de expandir si es necesario.
-                return true;
-            }
+            if (config.enabled && !string.IsNullOrEmpty(config.poolID) && config.spawnWeight > 0) return true;
         }
-
-        // Si ningún tipo de enemigo está habilitado o configurado, entonces no se puede spawnear.
         return false;
     }
 
     EnemySpawnConfig SelectEnemyType()
     {
-        // Crear lista de configs válidas
         List<EnemySpawnConfig> validConfigs = new List<EnemySpawnConfig>();
-
         foreach (var config in enemyConfigs)
         {
-            if (config.enabled && !string.IsNullOrEmpty(config.poolID) &&
-                config.spawnWeight > 0 && IsSpawnTypeAvailable(config))
+            if (config.enabled && !string.IsNullOrEmpty(config.poolID) && config.spawnWeight > 0 && IsSpawnTypeAvailable(config))
             {
                 validConfigs.Add(config);
             }
@@ -578,7 +584,6 @@ public class EnemySpawner : MonoBehaviour
 
         if (validConfigs.Count == 0) return null;
 
-        // Selección aleatoria basada en peso
         float totalWeight = 0f;
         foreach (var config in validConfigs)
         {
@@ -596,27 +601,18 @@ public class EnemySpawner : MonoBehaviour
                 return config;
             }
         }
-
-        return validConfigs[validConfigs.Count - 1]; // Fallback
+        return validConfigs[validConfigs.Count - 1];
     }
 
     bool IsSpawnTypeAvailable(EnemySpawnConfig config)
     {
         if (string.IsNullOrEmpty(config.poolID)) return false;
-
         if (poolManager != null && poolManager.IsInitialized)
         {
-            // MODIFICADO: Si permite expansión, siempre está disponible
             var poolConfig = poolManager.GetPoolConfiguration(config.poolID);
-            if (poolConfig != null && poolConfig.allowExpansion)
-            {
-                return true;
-            }
-
-            // Si no permite expansión, verificar disponibilidad
+            if (poolConfig != null && poolConfig.allowExpansion) return true;
             return poolManager.GetAvailableCount(config.poolID) > 0;
         }
-
         return false;
     }
 
@@ -624,14 +620,11 @@ public class EnemySpawner : MonoBehaviour
     {
         int previousCount = currentEnemyCount;
         currentEnemyCount = GameObject.FindGameObjectsWithTag("Enemy").Length;
-
         if (Mathf.Abs(currentEnemyCount - previousCount) > 0 && enableDebugLogs)
         {
             DebugLog($"Conteo de enemigos actualizado: {currentEnemyCount}/{maxEnemies}");
         }
     }
-
-    // ===== CALLBACKS DE EVENTOS =====
 
     void OnGameStateChanged(GameManager.GameState newState)
     {
@@ -641,14 +634,9 @@ public class EnemySpawner : MonoBehaviour
                 canSpawnEnemies = false;
                 DebugLog("Estado: Inicializando - Spawner pausado");
                 break;
-
             case GameManager.GameState.Playing:
-                if (levelReady)
-                {
-                    EnableSpawning();
-                }
+                if (levelReady) EnableSpawning();
                 break;
-
             case GameManager.GameState.GameOver:
                 if (pauseOnGameOver)
                 {
@@ -663,7 +651,6 @@ public class EnemySpawner : MonoBehaviour
     {
         levelReady = true;
         DebugLog("Nivel listo detectado");
-
         if (spawnOnStart)
         {
             Invoke(nameof(EnableSpawning), delayAfterLevelReady);
@@ -682,22 +669,15 @@ public class EnemySpawner : MonoBehaviour
             DebugLog("No se puede activar spawner: nivel no está listo");
             return;
         }
-
         canSpawnEnemies = true;
         nextSpawnTime = Time.time + spawnInterval;
-
-        // NUEVO: Sincronizar contador inicial
         UpdateEnemyCount();
-
         DebugLog($"✅ Spawner dinámico activado - Primer spawn en {spawnInterval} segundos");
     }
-
-    // ===== MÉTODOS PÚBLICOS =====
 
     public void StartSpawning()
     {
         spawnOnStart = true;
-
         if (levelReady || !waitForLevelReady)
         {
             EnableSpawning();
@@ -724,10 +704,8 @@ public class EnemySpawner : MonoBehaviour
     {
         GameObject[] enemies = GameObject.FindGameObjectsWithTag("Enemy");
         int poolReturned = 0;
-
         foreach (GameObject enemy in enemies)
         {
-            // Intentar devolver al pool
             if (poolManager != null)
             {
                 poolManager.Return(enemy);
@@ -735,11 +713,9 @@ public class EnemySpawner : MonoBehaviour
             }
             else
             {
-                // Fallback: destruir si no hay pool manager
                 Destroy(enemy);
             }
         }
-
         currentEnemyCount = 0;
         DebugLog($"Todos los enemigos limpiados: {poolReturned} devueltos al pool");
     }
@@ -752,8 +728,6 @@ public class EnemySpawner : MonoBehaviour
         }
     }
 
-    // ===== DEBUG VISUAL =====
-
     void OnDrawGizmosSelected()
     {
         if (!showSpawnGizmos) return;
@@ -761,30 +735,24 @@ public class EnemySpawner : MonoBehaviour
         if (mainCamera != null && Application.isPlaying)
         {
             UpdateCameraInfo();
-
             Vector3 cameraPos = mainCamera.transform.position;
 
-            // Dibujar límites de cámara
             Gizmos.color = Color.white;
             Vector3 topLeft = new Vector3(cameraPos.x - cameraHalfWidth, cameraPos.y + cameraHalfHeight, 0);
             Vector3 topRight = new Vector3(cameraPos.x + cameraHalfWidth, cameraPos.y + cameraHalfHeight, 0);
             Vector3 bottomLeft = new Vector3(cameraPos.x - cameraHalfWidth, cameraPos.y - cameraHalfHeight, 0);
             Vector3 bottomRight = new Vector3(cameraPos.x + cameraHalfWidth, cameraPos.y - cameraHalfHeight, 0);
-
             Gizmos.DrawLine(topLeft, topRight);
             Gizmos.DrawLine(topRight, bottomRight);
             Gizmos.DrawLine(bottomRight, bottomLeft);
             Gizmos.DrawLine(bottomLeft, topLeft);
 
-            // Dibujar anillo de spawn mínimo
             Gizmos.color = Color.yellow;
             DrawSpawnRing(cameraPos, minSpawnDistanceFromCamera);
 
-            // Dibujar anillo de spawn máximo
             Gizmos.color = Color.red;
             DrawSpawnRing(cameraPos, maxSpawnDistanceFromCamera);
 
-            // Dibujar puntos de spawn válidos
             Gizmos.color = Color.green;
             foreach (Vector2 point in validSpawnPoints)
             {
@@ -792,7 +760,6 @@ public class EnemySpawner : MonoBehaviour
             }
         }
 
-        // Estado del spawner
         if (Application.isPlaying)
         {
             Color statusColor = canSpawnEnemies ? Color.green : Color.red;
@@ -825,13 +792,11 @@ public class EnemySpawner : MonoBehaviour
         UnsubscribeFromSystemEvents();
     }
 
-    // ===== PROPIEDADES PÚBLICAS =====
     public bool IsSpawning => canSpawnEnemies;
     public bool IsLevelReady => levelReady;
     public int CurrentEnemyCount => currentEnemyCount;
     public int TotalSpawned => totalSpawned;
 
-    // Context Menus para testing
     [ContextMenu("Test Spawn Enemy Now")]
     public void TestSpawnEnemyNow()
     {
