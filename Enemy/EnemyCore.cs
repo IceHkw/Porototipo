@@ -228,15 +228,9 @@ public class EnemyCore : MonoBehaviour, IDamageable, IPoolable
 
     public void OnReturnToPool()
     {
-
-        if (ObjectPoolManager.Instance != null)
-        {
-            ObjectPoolManager.Instance.Return(gameObject);
-        }
-        else
-        {
-            Destroy(gameObject);
-        }
+        // << LÍNEA CORREGIDA >>
+        // Se ha eliminado la llamada recursiva a ObjectPoolManager.Instance.Return(gameObject);
+        // Ahora este método solo se encarga de resetear el estado del enemigo.
 
         isActiveInPool = false;
 
