@@ -12,11 +12,12 @@ public class SwordAttack : MonoBehaviour
     public float knockbackForce = 8f;
 
     [Header("Recoil Settings")]
-    [Tooltip("Fuerza del pequeÒo empujÛn hacia atr·s que recibe el jugador al golpear.")]
+    [Tooltip("Fuerza del peque√±o empuj√≥n hacia atr√°s que recibe el jugador al golpear.")]
     public float recoilForce = 4f;
 
     [Header("Attack Detection")]
     public LayerMask enemyLayer = -1;
+    public LayerMask groundLayer = -1; // --- A√ëADIDO: Layer para el terreno
     public Vector2 attackSize = new Vector2(1.5f, 1.5f);
     public Vector2 attackOffset = new Vector2(0.75f, 0f);
 
@@ -34,7 +35,7 @@ public class SwordAttack : MonoBehaviour
 
         if (animator == null)
         {
-            Debug.LogError("°SwordAttack no pudo encontrar el Animator en sus hijos!", this.gameObject);
+            Debug.LogError("¬°SwordAttack no pudo encontrar el Animator en sus hijos!", this.gameObject);
         }
 
         if (playerObject != null)
@@ -63,12 +64,17 @@ public class SwordAttack : MonoBehaviour
 
     public void OnAttackHit()
     {
-        DetectAndDamageEnemies();
+        DetectAndDamage();
     }
 
-    void DetectAndDamageEnemies()
+    void DetectAndDamage()
     {
         Vector2 attackPosition = (Vector2)transform.position + GetAttackPositionOffset();
+
+        // --- L√ìGICA MODIFICADA ---
+        bool hasHitSomething = false;
+
+        // 1. Detectar enemigos
         Collider2D[] hitColliders = Physics2D.OverlapBoxAll(attackPosition, attackSize, transform.eulerAngles.z, enemyLayer);
 
         foreach (var hitCollider in hitColliders)
@@ -82,17 +88,34 @@ public class SwordAttack : MonoBehaviour
                 Vector3 hitPoint = hitCollider.ClosestPoint(transform.position);
                 Transform damageSource = playerObject != null ? playerObject.transform : transform;
                 damageable.TakeDamage(damage, hitPoint, damageSource);
+                hasHitSomething = true;
+            }
+        }
 
-                if (playerMovement != null && !recoilApplied)
+        // 2. Detectar terreno si no se ha golpeado a un enemigo en este frame
+        if (!hasHitSomething)
+        {
+            Collider2D[] groundHits = Physics2D.OverlapBoxAll(attackPosition, attackSize, 0, groundLayer);
+            if (groundHits.Length > 0)
+            {
+                if (DestructibleTerrainController.Instance != null)
                 {
-                    Vector2 recoilDirection = -transform.right;
-                    // MODIFICADO: Llamamos al nuevo mÈtodo que inicia la corutina en PlayerMovement.
-                    playerMovement.IniciarRetroceso(recoilDirection, recoilForce);
-                    recoilApplied = true;
+                    // Da√±a la tile en el centro del √°rea de ataque
+                    DestructibleTerrainController.Instance.DamageTile(attackPosition, damage);
+                    hasHitSomething = true;
                 }
             }
         }
+
+        // 3. Aplicar retroceso si se golpe√≥ cualquier cosa (enemigo o terreno)
+        if (hasHitSomething && playerMovement != null && !recoilApplied)
+        {
+            Vector2 recoilDirection = -transform.right;
+            playerMovement.IniciarRetroceso(recoilDirection, recoilForce);
+            recoilApplied = true;
+        }
     }
+
 
     private Vector2 GetAttackPositionOffset()
     {
