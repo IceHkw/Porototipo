@@ -214,12 +214,22 @@ public class EnemyVFX : MonoBehaviour
     /// </summary>
     public void ResetVisualState()
     {
+        // --- LÍNEAS AÑADIDAS ---
+        // Detener cualquier corutina de flash que pudiera estar activa para evitar errores
+        if (flashCoroutine != null)
+        {
+            StopCoroutine(flashCoroutine);
+            flashCoroutine = null;
+        }
+        // -------------------------
+
         if (spriteRenderer != null)
         {
             spriteRenderer.enabled = true;
         }
         if (material != null)
         {
+            // Asegurar que el material no se quede "flasheado"
             material.SetFloat(flashAmountID, 0f);
         }
     }
