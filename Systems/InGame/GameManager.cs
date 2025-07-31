@@ -1,4 +1,4 @@
-﻿using UnityEngine;
+using UnityEngine;
 using UnityEngine.UI;
 using TMPro;
 using UnityEngine.SceneManagement;
@@ -171,7 +171,7 @@ public class GameManager : MonoBehaviour
     {
         if (!nivelListo) return; // No procesar si el nivel no está listo
 
-        if (playerStats != null && !playerStats.EstaVivo)
+        if (playerStats != null && !playerStats.IsAlive)
         {
             TriggerGameOver();
         }
