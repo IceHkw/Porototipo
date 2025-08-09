@@ -1,0 +1,328 @@
+.hud-element.bottom-right {
+    position: absolute;
+    bottom: 100px;
+    right: 20px;
+}
+
+.hud-root {
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    padding: 20px;
+}
+
+.hud-element {
+    position: absolute;
+    background-color: rgba(0, 0, 0, 0.7);
+    border-width: 2px;
+    border-color: rgba(0, 255, 255, 0.5);
+    padding: 10px;
+    -unity-font-definition: resource('DeadRevolverDisplay');
+}
+
+.top-bar {
+    display: flex;
+    flex-direction: row;
+    justify-content: space-between;
+}
+
+.bottom-bar {
+    display: flex;
+    flex-direction: row;
+    justify-content: space-between;
+    align-items: flex-end;
+}
+
+#health-container {
+    min-width: 250px;
+    scale: 1.5 1.5;
+    translate: 49px 45px;
+}
+
+.hud-label {
+    color: rgb(0, 255, 255);
+    font-size: 16px;
+    -unity-text-align: upper-left;
+    margin-bottom: 5px;
+    -unity-font-definition: resource('DeadRevolverDisplay');
+    -unity-font-style: bold;
+}
+
+.bar-container {
+    width: 200px;
+    height: 20px;
+    background-color: rgba(0, 0, 0, 0.8);
+    border-width: 2px;
+    border-color: rgb(0, 255, 255);
+    position: relative;
+    margin-bottom: 5px;
+}
+
+.bar-background {
+    position: absolute;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(128, 0, 0, 0.5);
+}
+
+.bar-fill {
+    position: absolute;
+    height: 100%;
+    transition-duration: 0.3s;
+    transition-timing-function: ease-out;
+}
+
+.health-color {
+    background-color: rgb(0, 255, 0);
+    background-image: none;
+}
+
+.hud-value {
+    color: rgb(255, 255, 255);
+    font-size: 14px;
+    -unity-text-align: middle-right;
+    -unity-font-definition: resource('DeadRevolverDisplay');
+    -unity-font-style: normal;
+}
+
+.overdrive-color {
+    background-color: rgb(255, 165, 0);
+    color: rgb(0, 0, 0);
+}
+
+.health-color {
+    background-color: rgb(0, 255, 0);
+    background-image: none;
+}
+
+#combo-container {
+    min-width: 200px;
+    -unity-text-align: middle-center;
+}
+
+.combo-label {
+    color: rgb(0, 255, 255);
+    font-size: 14px;
+    -unity-text-align: middle-center;
+    -unity-font-definition: resource('DeadRevolverDisplay');
+    -unity-font-style: bold;
+}
+
+.combo-value {
+    color: rgb(255, 255, 255);
+    font-size: 24px;
+    -unity-text-align: middle-center;
+    -unity-font-style: normal;
+    -unity-font-definition: resource('DeadRevolverDisplay');
+    transition-duration: 0.3s;
+    transition-timing-function: ease-out;
+}
+
+.combo-value.combo-increase {
+    scale: 1.2;
+    color: rgb(255, 255, 0);
+}
+
+.combo-value.combo-high {
+    color: rgb(255, 215, 0);
+}
+
+.combo-value.combo-reset {
+    color: rgb(128, 128, 128);
+}
+
+#wave-container {
+    min-width: 120px;
+    -unity-text-align: middle-center;
+}
+
+.wave-label {
+    color: rgb(0, 255, 255);
+    font-size: 14px;
+    -unity-text-align: middle-center;
+    -unity-font-definition: resource('DeadRevolverDisplay');
+}
+
+.wave-value {
+    color: rgb(255, 255, 255);
+    font-size: 20px;
+    -unity-text-align: middle-center;
+    -unity-font-style: bold;
+    -unity-font-definition: resource('DeadRevolverDisplay');
+}
+
+.ability-slot {
+    width: 64px;
+    height: 64px;
+    background-color: rgba(0, 0, 0, 0.8);
+    border-width: 2px;
+    border-color: rgb(0, 255, 255);
+    margin: 0 10px;
+    position: relative;
+}
+
+.ability-slot.ultimate {
+    width: 80px;
+    height: 80px;
+    border-color: rgb(255, 215, 0);
+    border-width: 3px;
+}
+
+.ability-icon {
+    position: absolute;
+    width: 100%;
+    height: 100%;
+    -unity-background-scale-mode: scale-to-fit;
+}
+
+.cooldown-overlay {
+    position: absolute;
+    bottom: 0;
+    width: 100%;
+    background-color: rgba(0, 0, 0, 0.8);
+    justify-content: center;
+    align-items: center;
+}
+
+.cooldown-text {
+    color: rgb(255, 255, 255);
+    font-size: 20px;
+    -unity-text-align: middle-center;
+    -unity-font-style: normal;
+    -unity-font-definition: resource('DeadRevolverDisplay');
+}
+
+.ability-key {
+    position: absolute;
+    bottom: -20px;
+    width: 100%;
+    color: rgb(0, 255, 255);
+    font-size: 12px;
+    -unity-text-align: middle-center;
+    -unity-font-definition: resource('DeadRevolverDisplay');
+}
+
+.hud-element:hover {
+    border-color: rgba(0, 255, 255, 0.8);
+    transition-duration: 0.2s;
+}
+
+.health-low .bar-fill {
+    animation-duration: 0.5s;
+    animation-iteration-count: infinite;
+    animation-name: pulse;
+}
+
+* {
+    image-rendering: pixelated;
+    -unity-font-smoothing: none;
+}
+
+.hud-element {
+    border-radius: 0;
+}
+
+.bar-container {
+    border-radius: 0;
+}
+
+.ability-slot {
+    border-radius: 0;
+    -unity-font-definition: resource('DeadRevolverDisplay');
+    -unity-font-style: bold;
+}
+
+.killstreak-container {
+    position: absolute;
+    bottom: 100px;
+    right: 20px;
+    flex-direction: column-reverse;
+    align-items: flex-end;
+    scale: 1.2;
+}
+
+.killstreak-slot {
+    width: 220px;
+    height: 64px;
+    margin-bottom: 10px;
+    flex-direction: row;
+    align-items: center;
+    background-color: rgba(0, 0, 0, 0.8);
+    border-width: 2px;
+    border-color: rgb(0, 255, 255);
+    border-left-width: 4px;
+    padding: 8px;
+    position: relative;
+    transition-duration: 0.3s;
+}
+
+.killstreak-slot-0 {
+    border-left-color: rgb(0, 255, 0);
+}
+
+.killstreak-slot-1 {
+    border-left-color: rgb(0, 170, 255);
+}
+
+.killstreak-slot-2 {
+    border-left-color: rgb(255, 215, 0);
+}
+
+.killstreak-slot.active {
+    background-color: rgba(0, 255, 255, 0.1);
+    border-color: rgb(0, 255, 255);
+}
+
+.killstreak-icon {
+    width: 48px;
+    height: 48px;
+    margin-right: 12px;
+    background-color: rgba(0, 0, 0, 0.5);
+    border-width: 1px;
+    border-color: rgba(0, 255, 255, 0.3);
+    -unity-background-scale-mode: scale-to-fit;
+}
+
+.killstreak-info {
+    flex-grow: 1;
+    flex-direction: column;
+    justify-content: center;
+}
+
+.killstreak-name {
+    color: rgb(255, 255, 255);
+    font-size: 14px;
+    -unity-font-style: bold;
+    -unity-font-definition: resource('DeadRevolverDisplay');
+    margin-bottom: 2px;
+}
+
+.killstreak-combo {
+    color: rgb(0, 255, 255);
+    font-size: 12px;
+    -unity-font-definition: resource('DeadRevolverDisplay');
+}
+
+.killstreak-combo.active {
+    color: rgb(0, 255, 0);
+    -unity-font-style: bold;
+}
+
+.killstreak-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: rgba(0, 0, 0, 0.6);
+}
+
+.killstreak-slot.killstreak-activated {
+    background-color: rgba(255, 255, 0, 0.3);
+    border-color: rgb(255, 255, 0);
+}
+
+.killstreak-slot:hover {
+    background-color: rgba(0, 255, 255, 0.05);
+    transition-duration: 0.2s;
+}
